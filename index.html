@@ -526,7 +526,7 @@
                 عشان الذكاء الاصطناعي يشتغل، تحتاج مفتاح API مجاني<br><br>
                 <a href="https://openrouter.ai/keys" target="_blank">اضغط هنا عشان تحصل على المفتاح مجاناً</a>
             </p>
-            <input type="password" id="apiKey" placeholder="الصق المفتاح هنا...">
+            <input type="password" id="apiKey" placeholder="الصق المفتاح هنا (يبدأ بـ sk-or-...)">
             <button onclick="saveKey()">
                 <i class="fas fa-save"></i> حفظ وبدء الاستخدام
             </button>
@@ -623,21 +623,52 @@
     </div>
 
     <script>
-        let apiKey = localStorage.getItem('openrouter_key') || '';
+        let apiKey = '';
         
-        if (apiKey) {
-            document.getElementById('apiModal').classList.remove('active');
-        }
+        // Load API key when page loads
+        window.addEventListener('DOMContentLoaded', () => {
+            const savedKey = localStorage.getItem('openrouter_key');
+            console.log('🔑 Saved key:', savedKey ? 'Found (' + savedKey.substring(0, 10) + '...)' : 'Not found');
+            
+            if (savedKey && savedKey.length > 20 && savedKey.startsWith('sk-or-')) {
+                apiKey = savedKey;
+                document.getElementById('apiModal').classList.remove('active');
+                showSuccess('✅ تم تحميل المفتاح بنجاح!');
+            } else {
+                localStorage.removeItem('openrouter_key');            }
+        });
 
         function saveKey() {
             const key = document.getElementById('apiKey').value.trim();
-            if (!key || key.length < 10) {
-                showError('⚠️ المفتاح غير صحيح. تأكد من نسخه كاملاً');
+            console.log('💾 Saving key:', key ? 'Yes (length: ' + key.length + ')' : 'No');
+            
+            if (!key) {
+                showError('⚠️ من فضلك أدخل المفتاح');
                 return;
             }
-            localStorage.setItem('openrouter_key', key);            apiKey = key;
-            document.getElementById('apiModal').classList.remove('active');
-            showSuccess('✅ تم حفظ المفتاح بنجاح!');
+            
+            if (!key.startsWith('sk-or-')) {
+                showError('⚠️ المفتاح يجب أن يبدأ بـ sk-or-...');
+                return;
+            }
+            
+            if (key.length < 20) {
+                showError('⚠️ المفتاح قصير جداً. تأكد من نسخه كاملاً');
+                return;
+            }
+            
+            try {
+                localStorage.setItem('openrouter_key', key);
+                apiKey = key;
+                console.log('✅ Key saved successfully');
+                
+                document.getElementById('apiModal').classList.remove('active');
+                showSuccess('✅ تم حفظ المفتاح بنجاح! يمكنك الآن البدء');
+                
+            } catch (e) {
+                console.error('❌ Error saving key:', e);
+                showError('❌ خطأ في الحفظ. تأكد من إعدادات المتصفح');
+            }
         }
 
         function showSettings() {
@@ -653,30 +684,42 @@
 
         function quickAsk(text) {
             document.getElementById('messageInput').value = text;
-            sendMessage();
-        }
+            sendMessage();        }
 
         async function sendMessage() {
             const input = document.getElementById('messageInput');
             const text = input.value.trim();
             
-            if (!text) return;
-            
-            if (!apiKey) {
-                showSettings();
-                showError('⚠️ تحتاج مفتاح API أولاً');
+            if (!text) {
+                showError('⚠️ اكتب رسالة أولاً');
                 return;
             }
+            
+            // Reload key from storage to make sure it's there
+            const storedKey = localStorage.getItem('openrouter_key');
+            if (!storedKey || storedKey.length < 20 || !storedKey.startsWith('sk-or-')) {
+                console.error('❌ No valid API key found');
+                showSettings();
+                showError('⚠️ المفتاح مش موجود أو غير صحيح. من فضلك أدخله تاني');
+                return;
+            }
+            
+            apiKey = storedKey;
+            console.log('📤 Sending message with key:', apiKey.substring(0, 10) + '...');
 
             document.getElementById('welcomeScreen').style.display = 'none';
             addMessage(text, 'user');
             input.value = '';
 
             const btn = document.getElementById('sendBtn');
+            const originalBtnText = btn.innerHTML;
             btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> جاري...';
             document.getElementById('typingIndicator').classList.add('active');
 
             try {
+                console.log('🌐 Sending request to OpenRouter API...');
+                
                 const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
                     method: 'POST',
                     headers: {
@@ -684,37 +727,62 @@
                         'Content-Type': 'application/json',
                         'HTTP-Referer': window.location.href,
                         'X-Title': 'AI Assistant by Abdulrahman Ahmed Bashir'
-                    },                    body: JSON.stringify({
+                    },
+                    body: JSON.stringify({
                         model: 'openai/gpt-3.5-turbo',
                         messages: [{ role: 'user', content: text }],
                         max_tokens: 1000
                     })
                 });
+                console.log('📥 Response status:', response.status);
 
+                if (response.status === 401) {
+                    throw new Error('المفتاح غير صحيح أو منتهي الصلاحية');
+                }
+                
+                if (response.status === 403) {
+                    throw new Error('المفتاح مش مفعل. تأكد من تفعيله في OpenRouter');
+                }
+                
                 if (!response.ok) {
-                    const err = await response.json();
-                    throw new Error(err.error?.message || `Error ${response.status}`);
+                    const errorData = await response.json().catch(() => ({}));
+                    console.error('API Error:', errorData);
+                    throw new Error(errorData.error?.message || `خطأ في الخادم (${response.status})`);
                 }
 
                 const data = await response.json();
+                console.log('✅ Response received:', data);
+                
+                if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+                    throw new Error('الاستجابة غير صحيحة من الخادم');
+                }
+                
                 const reply = data.choices[0].message.content;
                 
                 document.getElementById('typingIndicator').classList.remove('active');
                 addMessage(reply, 'bot');
+                showSuccess('✅ تم الإرسال بنجاح!');
 
             } catch (error) {
+                console.error('❌ Error:', error);
                 document.getElementById('typingIndicator').classList.remove('active');
                 showError('❌ ' + error.message);
+                
+                if (error.message.includes('غير صحيح') || error.message.includes('منتهي')) {
+                    localStorage.removeItem('openrouter_key');
+                    apiKey = '';
+                    setTimeout(() => showSettings(), 2000);
+                }
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = originalBtnText;
             }
-
-            btn.disabled = false;
         }
 
         function addMessage(text, sender) {
             const chat = document.getElementById('chatMessages');
             const msgDiv = document.createElement('div');
-            msgDiv.className = `message ${sender}`;
-            
+            msgDiv.className = `message ${sender}`;            
             const avatar = sender === 'user' ? 'أنت' : 'AI';
             msgDiv.innerHTML = `
                 <div class="msg-avatar">${avatar}</div>
@@ -726,6 +794,7 @@
         }
 
         function formatText(text) {
+            if (!text) return '';
             return text
                 .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
                 .replace(/\n/g, '<br>');
@@ -733,8 +802,10 @@
 
         function showError(msg) {
             const err = document.getElementById('errorMsg');
-            document.getElementById('errorText').textContent = msg;            err.classList.add('active');
-            setTimeout(() => err.classList.remove('active'), 5000);
+            document.getElementById('errorText').textContent = msg;
+            err.classList.add('active');
+            console.error('🚨 Error shown:', msg);
+            setTimeout(() => err.classList.remove('active'), 6000);
         }
 
         function showSuccess(msg) {
@@ -743,6 +814,7 @@
             err.style.color = '#22543d';
             document.getElementById('errorText').textContent = msg;
             err.classList.add('active');
+            console.log('✅ Success:', msg);
             setTimeout(() => {
                 err.classList.remove('active');
                 err.style.background = '#fed7d7';
